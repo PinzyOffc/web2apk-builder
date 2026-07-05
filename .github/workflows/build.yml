@@ -1,58 +1,95 @@
-name: Build Sync XxX APK
+name: Build APK
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
+    inputs:
+      build_id:
+        description: 'Unique build ID dari bot (buat matching run)'
+        required: true
+      app_name:
+        description: 'Nama aplikasi'
+        required: false
+        default: 'MyApp'
+      package_name:
+        description: 'Package name (com.example.app)'
+        required: false
+      build_type:
+        description: 'release atau debug'
+        required: true
+        default: 'release'
+      zip_url:
+        description: 'URL zip project (dari Catbox)'
+        required: true
+
+# run-name ini WAJIB ada build_id-nya, karena bot cari run lewat display_title
+run-name: Build ${{ inputs.app_name }} [${{ inputs.build_id }}]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Download project zip
+        run: curl -L "${{ inputs.zip_url }}" -o project.zip
+
+      - name: Extract project
+        run: unzip -o -q project.zip -d project
+
+      - name: Detect project type (flutter / android)
+        id: detect
+        run: |
+          if [ -f "project/pubspec.yaml" ]; then
+            echo "type=flutter" >> "$GITHUB_OUTPUT"
+          elif [ -f "project/build.gradle" ] || [ -f "project/build.gradle.kts" ]; then
+            echo "type=android" >> "$GITHUB_OUTPUT"
+          else
+            echo "❌ Tidak ketemu pubspec.yaml atau build.gradle di root project" >&2
+            exit 1
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: '17'
-          distribution: 'temurin'
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # ---------- Kalau project-nya Flutter ----------
+      - name: Set up Flutter
+        if: steps.detect.outputs.type == 'flutter'
+        uses: subosito/flutter-action@v2
         with:
-          python-version: '3.11'
+          channel: stable
+          cache: true
 
-      - name: Install Pillow
-        run: pip install Pillow
-
-      - name: Generate App Icons
-        run: python3 generate_icons.py
-
-      - name: Setup Gradle Wrapper
+      - name: Build Flutter APK
+        if: steps.detect.outputs.type == 'flutter'
+        working-directory: project
         run: |
-          curl -L -o android/gradle/wrapper/gradle-wrapper.jar \
-            "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
-          chmod +x android/gradlew
+          flutter pub get
+          flutter build apk --${{ inputs.build_type }}
 
-      - name: Build Release APK
+      # ---------- Kalau project-nya Android/Gradle ----------
+      - name: Set up Android SDK
+        if: steps.detect.outputs.type == 'android'
+        uses: android-actions/setup-android@v3
+
+      - name: Build Android APK
+        if: steps.detect.outputs.type == 'android'
+        working-directory: project
         run: |
-          cd android
-          ./gradlew assembleRelease --no-daemon
+          chmod +x gradlew
+          if [ "${{ inputs.build_type }}" = "release" ]; then
+            ./gradlew assembleRelease --no-daemon
+          else
+            ./gradlew assembleDebug --no-daemon
+          fi
 
-      - name: Rename APK
-        run: |
-          mkdir -p output
-          find android/app/build/outputs/apk/release/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX.apk
-
-      - name: Upload APK Artifact
+      # ---------- Ambil hasil APK, apapun tipe project-nya ----------
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CyberPro-APK
-          path: output/SyncXxX.apk
-          retention-days: 30
-          
+          name: app-apk
+          path: |
+            project/**/build/app/outputs/flutter-apk/*.apk
+            project/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 1
