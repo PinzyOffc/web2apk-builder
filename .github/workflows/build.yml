@@ -32,24 +32,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Construct API URL untuk ambil release asset
           API_URL="https://api.github.com/repos/${{ github.repository }}/releases/${{ inputs.release_id }}/assets"
-          echo "Fetching assets dari release ${{ inputs.release_id }}..."
+          echo "📥 Fetching assets dari release ID ${{ inputs.release_id }}..."
           
-          # Cari file .zip di asset list
-          ZIP_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$API_URL" | grep -o '"browser_download_url":"[^"]*\.zip"' | head -1 | cut -d'"' -f4)
+          # Pakai jq buat parse JSON dengan proper
+          ZIP_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$API_URL" | jq -r '.[] | select(.name | endswith(".zip")) | .browser_download_url' | head -1)
           
-          if [ -z "$ZIP_URL" ]; then
-            echo "❌ Tidak ada .zip di release assets"
+          if [ -z "$ZIP_URL" ] || [ "$ZIP_URL" = "null" ]; then
+            echo "❌ Tidak ada .zip asset di release ini"
+            curl -s -H "Authorization: token $GITHUB_TOKEN" "$API_URL" | jq .
             exit 1
           fi
           
-          echo "Downloading from: $ZIP_URL"
-          curl -L -H "Authorization: token $GITHUB_TOKEN" "$ZIP_URL" -o project.zip
-          if [ ! -f project.zip ]; then
-            echo "❌ Gagal download project.zip"
+          echo "🔗 Download URL: $ZIP_URL"
+          curl -L -H "Authorization: token $GITHUB_TOKEN" "$ZIP_URL" -o project.zip -w "\n%{http_code}\n"
+          
+          if [ ! -f project.zip ] || [ ! -s project.zip ]; then
+            echo "❌ Gagal download atau file kosong"
             exit 1
           fi
+          
+          echo "✅ Download sukses, ukuran: $(ls -lh project.zip | awk '{print $5}')"
 
       - name: Extract project
         run: unzip -o -q project.zip -d project
@@ -68,6 +71,51 @@ jobs:
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ---------- Kalau project-nya Flutter ----------
+      - name: Set up Flutter
+        if: steps.detect.outputs.type == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build Flutter APK
+        if: steps.detect.outputs.type == 'flutter'
+        working-directory: project
+        run: |
+          flutter pub get
+          flutter build apk --${{ inputs.build_type }}
+
+      # ---------- Kalau project-nya Android/Gradle ----------
+      - name: Set up Android SDK
+        if: steps.detect.outputs.type == 'android'
+        uses: android-actions/setup-android@v3
+
+      - name: Build Android APK
+        if: steps.detect.outputs.type == 'android'
+        working-directory: project
+        run: |
+          chmod +x gradlew
+          if [ "${{ inputs.build_type }}" = "release" ]; then
+            ./gradlew assembleRelease --no-daemon
+          else
+            ./gradlew assembleDebug --no-daemon
+          fi
+
+      # ---------- Ambil hasil APK, apapun tipe project-nya ----------
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-apk
+          path: |
+            project/**/build/app/outputs/flutter-apk/*.apk
+            project/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 1
         with:
           distribution: temurin
           java-version: '17'
