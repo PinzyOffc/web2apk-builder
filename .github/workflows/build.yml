@@ -1,105 +1,214 @@
-name: Build APK
+name: Flutter Build
 
 on:
   workflow_dispatch:
     inputs:
-      build_id:
-        description: 'Unique build ID dari bot (buat matching run)'
+      projectName:
+        description: 'Project Name'
         required: true
-      app_name:
-        description: 'Nama aplikasi'
-        required: false
-        default: 'MyApp'
-      package_name:
-        description: 'Package name (com.example.app)'
-        required: false
-      build_type:
-        description: 'release atau debug'
+        type: string
+      appName:
+        description: 'App Display Name'
         required: true
+        type: string
+      packageName:
+        description: 'Package Name (com.example.app)'
+        required: true
+        type: string
+      buildType:
+        description: 'Build Type'
+        required: true
+        type: string
+      versionCode:
+        description: 'Version Code'
+        required: false
+        default: '1'
+        type: string
+      versionName:
+        description: 'Version Name'
+        required: false
+        default: '1.0.0'
+        type: string
+      releaseMode:
+        description: 'Release Mode'
+        required: false
         default: 'release'
-      zip_path:
-        description: 'Path zip di repo (misal: builds/<id>.zip)'
+        type: string
+      jobId:
+        description: 'Job ID'
         required: true
-
-# run-name ini WAJIB ada build_id-nya, karena bot cari run lewat display_title
-run-name: Build ${{ inputs.app_name }} [${{ inputs.build_id }}]
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+
     steps:
-      - name: Checkout repo (ambil file zip dari repo)
+      - name: 📦 Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Verify zip exists
-        run: |
-          if [ ! -f "${{ inputs.zip_path }}" ]; then
-            echo "❌ File tidak ditemukan: ${{ inputs.zip_path }}"
-            ls -la builds/ || echo "Folder builds tidak ada"
-            exit 1
-          fi
-          echo "✅ Zip found: $(ls -lh '${{ inputs.zip_path }}' | awk '{print $5}')"
-
-      - name: Extract project
-        run: unzip -o -q "${{ inputs.zip_path }}" -d project
-
-      - name: Detect project type (flutter / android)
-        id: detect
-        run: |
-          if [ -f "project/pubspec.yaml" ]; then
-            echo "type=flutter" >> "$GITHUB_OUTPUT"
-          elif [ -f "project/build.gradle" ] || [ -f "project/build.gradle.kts" ]; then
-            echo "type=android" >> "$GITHUB_OUTPUT"
-          else
-            echo "❌ Tidak ketemu pubspec.yaml atau build.gradle di root project" >&2
-            exit 1
-          fi
-
-      - name: Set up JDK 17
+      - name: 🔧 Setup Java JDK
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: '17'
+          distribution: 'temurin'
+          java-version: '11'
+          cache: 'gradle'
 
-      # ---------- Kalau project-nya Flutter ----------
-      - name: Set up Flutter
-        if: steps.detect.outputs.type == 'flutter'
+      - name: 🔄 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.19.x'
+          channel: 'stable'
           cache: true
+          cache-key: flutter-${{ hashFiles('**/pubspec.lock') }}
+          cache-path: ${{ runner.tool_cache }}/flutter
 
-      - name: Build Flutter APK
-        if: steps.detect.outputs.type == 'flutter'
-        working-directory: project
+      - name: 📥 Get Flutter Dependencies
         run: |
           flutter pub get
-          flutter build apk --${{ inputs.build_type }}
+          flutter pub upgrade
 
-      # ---------- Kalau project-nya Android/Gradle ----------
-      - name: Set up Android SDK
-        if: steps.detect.outputs.type == 'android'
-        uses: android-actions/setup-android@v3
+      - name: 🔍 Flutter Doctor
+        run: flutter doctor -v
 
-      - name: Build Android APK
-        if: steps.detect.outputs.type == 'android'
-        working-directory: project
+      - name: 🎨 Update App Configuration
         run: |
-          chmod +x gradlew
-          if [ "${{ inputs.build_type }}" = "release" ]; then
-            ./gradlew assembleRelease --no-daemon
+          mkdir -p build_config
+          cat > lib/generated/version.dart << EOF
+          const String APP_NAME = '${{ inputs.appName }}';
+          const String APP_VERSION = '${{ inputs.versionName }}';
+          const int BUILD_NUMBER = ${{ inputs.versionCode }};
+          const String PACKAGE_NAME = '${{ inputs.packageName }}';
+          EOF
+
+      - name: 📦 Build APK (${{ inputs.releaseMode }})
+        run: |
+          flutter build apk \
+            --${{ inputs.releaseMode }} \
+            --build-name=${{ inputs.versionName }} \
+            --build-number=${{ inputs.versionCode }} \
+            --target-platform=android-arm64 \
+            --obfuscate \
+            --split-debug-info=build/app/outputs/symbols
+
+      - name: 📊 Check APK Size
+        run: |
+          APK_PATH="build/app/outputs/flutter-apk/app-${{ inputs.releaseMode }}.apk"
+          if [ -f "$APK_PATH" ]; then
+            SIZE_BYTES=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH")
+            SIZE_MB=$(echo "scale=2; $SIZE_BYTES / 1048576" | bc)
+            echo "APK_SIZE=$SIZE_MB" >> $GITHUB_ENV
+            echo "✅ APK Size: ${SIZE_MB}MB"
+            
+            # Size limit check (2000 MB)
+            if (( $(echo "$SIZE_MB > 2000" | bc -l) )); then
+              echo "❌ APK exceeds 2000MB limit"
+              exit 1
+            fi
           else
-            ./gradlew assembleDebug --no-daemon
+            echo "❌ APK not found!"
+            exit 1
           fi
 
-      # ---------- Ambil hasil APK, apapun tipe project-nya ----------
-      - name: Upload APK artifact
+      - name: 📝 Rename APK
+        run: |
+          APK_SRC="build/app/outputs/flutter-apk/app-${{ inputs.releaseMode }}.apk"
+          APK_DEST="build/app/outputs/flutter-apk/${{ inputs.appName }}.apk"
+          if [ -f "$APK_SRC" ]; then
+            mv "$APK_SRC" "$APK_DEST"
+            ls -lh "$APK_DEST"
+          fi
+
+      - name: 📤 Upload APK as Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: app-apk
-          path: |
-            project/**/build/app/outputs/flutter-apk/*.apk
-            project/**/build/outputs/apk/**/*.apk
-          if-no-files-found: error
-          retention-days: 1
+          name: flutter-apk
+          path: build/app/outputs/flutter-apk/${{ inputs.appName }}.apk
+          retention-days: 30
+
+      - name: 📋 Generate Build Report
+        if: always()
+        run: |
+          {
+            echo "=== BUILD REPORT ==="
+            echo "Job ID: ${{ inputs.jobId }}"
+            echo "App Name: ${{ inputs.appName }}"
+            echo "Package: ${{ inputs.packageName }}"
+            echo "Version: ${{ inputs.versionName }} (Code: ${{ inputs.versionCode }})"
+            echo "Build Status: ${{ job.status }}"
+            echo "Build Time: $(date)"
+            echo "APK Size: ${{ env.APK_SIZE }}MB"
+            echo ""
+            echo "=== FLUTTER INFO ==="
+            flutter --version
+            echo ""
+            echo "=== SYSTEM INFO ==="
+            uname -a
+            java -version 2>&1 || true
+          } > build_report.txt
+
+      - name: 📤 Upload Build Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: build_report.txt
+          retention-days: 7
+
+      - name: 💾 Save Symbols
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-symbols
+          path: build/app/outputs/symbols
+          retention-days: 7
+
+      - name: ❌ Generate Error Log
+        if: failure()
+        run: |
+          {
+            echo "=== BUILD ERROR LOG ==="
+            echo "Job ID: ${{ inputs.jobId }}"
+            echo "Timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "Status: FAILED"
+            echo ""
+            echo "=== ERROR DETAILS ==="
+            echo "App Name: ${{ inputs.appName }}"
+            echo "Package: ${{ inputs.packageName }}"
+            echo "Build Type: ${{ inputs.buildType }}"
+            echo ""
+            echo "=== FLUTTER DOCTOR ==="
+            flutter doctor -v 2>&1 || echo "Flutter doctor failed"
+            echo ""
+            echo "=== GRADLE BUILD LOG ==="
+            if [ -f ".gradle/build.log" ]; then
+              tail -100 .gradle/build.log
+            else
+              echo "No gradle build log found"
+            fi
+          } > error_log.txt
+          
+          # Upload error log
+          echo "Error log generated"
+
+      - name: 📤 Upload Error Log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-logs
+          path: error_log.txt
+          retention-days: 3
+
+      - name: 🔔 Build Status Summary
+        if: always()
+        run: |
+          echo "📊 Build Summary:"
+          echo "- Status: ${{ job.status }}"
+          echo "- Job ID: ${{ inputs.jobId }}"
+          echo "- Duration: $(date -u +'%H:%M:%S')"
+          echo "- APK Size: ${{ env.APK_SIZE }}MB"
           
