@@ -4,6 +4,20 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      zip_url:
+        description: 'URL ZIP untuk download'
+        required: false
+        type: string
+      tag:
+        description: 'Tag versi'
+        required: false
+        type: string
+      build_type:
+        description: 'Tipe build (debug/release)'
+        required: false
+        type: string
+        default: 'release'
 
 jobs:
   build:
@@ -39,19 +53,55 @@ jobs:
             "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
           chmod +x android/gradlew
 
+      - name: Download ZIP (if provided)
+        if: ${{ github.event.inputs.zip_url != '' }}
+        run: |
+          curl -L -o source.zip "${{ github.event.inputs.zip_url }}"
+          unzip -o source.zip -d ./
+          echo "✅ ZIP downloaded and extracted"
+
+      - name: Show build info
+        run: |
+          echo "📦 Build Type: ${{ github.event.inputs.build_type || 'release' }}"
+          echo "🏷️ Tag: ${{ github.event.inputs.tag || 'latest' }}"
+          echo "🔨 Building Sync XxX APK..."
+
       - name: Build Release APK
         run: |
           cd android
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assemble${{ github.event.inputs.build_type == 'debug' && 'Debug' || 'Release' }} --no-daemon
 
       - name: Rename APK
         run: |
           mkdir -p output
-          find android/app/build/outputs/apk/release/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX.apk
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
+          if [ "$BUILD_TYPE" = "debug" ]; then
+            find android/app/build/outputs/apk/debug/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX-debug.apk
+          else
+            find android/app/build/outputs/apk/release/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX-release.apk
+          fi
+
+      - name: Create version info
+        run: |
+          TAG="${{ github.event.inputs.tag || 'latest' }}"
+          echo "Version: $TAG" > output/version.txt
+          echo "Build Date: $(date)" >> output/version.txt
+          echo "Build Type: ${{ github.event.inputs.build_type || 'release' }}" >> output/version.txt
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CyberPro-APK
-          path: output/SyncXxX.apk
+          name: SyncXxX-APK-${{ github.event.inputs.tag || 'latest' }}
+          path: output/
           retention-days: 30
+
+      - name: Upload APK to Release (if tag provided)
+        if: ${{ github.event.inputs.tag != '' }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: output/SyncXxX-${{ github.event.inputs.build_type || 'release' }}.apk
+          asset_name: SyncXxX-${{ github.event.inputs.tag }}.apk
+          asset_content_type: application/vnd.android.package-archive
