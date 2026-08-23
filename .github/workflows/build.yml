@@ -44,14 +44,10 @@ jobs:
       - name: Install Pillow
         run: pip install Pillow
 
-      # ==========================================================
-      # Step Generate App Icons dengan script yang di-embed
-      # ==========================================================
       - name: Generate App Icons
         run: |
           cat > generate_icons.py << 'EOF'
           import os
-
           try:
               from PIL import Image, ImageDraw
           except ImportError:
@@ -90,7 +86,6 @@ jobs:
               draw.ellipse([size//4, size//4, 3*size//4, 3*size//4], fill=(0, 212, 255))
               return icon
 
-          # ── Default icon (sync.jpg) ──
           use_icon = os.path.isfile("sync.jpg")
           img_base = load_img("sync.jpg") if use_icon else None
 
@@ -103,7 +98,6 @@ jobs:
               icon.save(os.path.join(out_dir, "ic_launcher_round.png"), "PNG")
               print(f"Default {density}: {size}x{size}")
 
-              # ── Theme icons ──
               for name, src_file in THEMES.items():
                   if os.path.isfile(src_file):
                       theme_img = load_img(src_file).resize((size, size), Image.LANCZOS)
@@ -119,11 +113,11 @@ jobs:
 
           python3 generate_icons.py
 
-- name: Setup Gradle Wrapper
-  run: |
-    cd android
-    gradle wrapper --gradle-version 8.4
-    chmod +x gradlew
+      - name: Setup Gradle Wrapper
+        run: |
+          cd android
+          gradle wrapper --gradle-version 8.4
+          chmod +x gradlew
 
       - name: Download ZIP (if provided)
         if: ${{ github.event.inputs.zip_url != '' }}
@@ -168,24 +162,24 @@ jobs:
           retention-days: 30
 
       - name: Create Release
-  id: create_release
-  if: ${{ github.event.inputs.tag != '' }}
-  uses: actions/create-release@v1
-  env:
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  with:
-    tag_name: ${{ github.event.inputs.tag }}
-    release_name: Release ${{ github.event.inputs.tag }}
-    draft: false
-    prerelease: false
+        id: create_release
+        if: ${{ github.event.inputs.tag != '' }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          release_name: Release ${{ github.event.inputs.tag }}
+          draft: false
+          prerelease: false
 
-- name: Upload APK to Release
-  if: ${{ github.event.inputs.tag != '' }}
-  uses: actions/upload-release-asset@v1
-  env:
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  with:
-    upload_url: ${{ steps.create_release.outputs.upload_url }}
-    asset_path: output/SyncXxX-${{ github.event.inputs.build_type || 'release' }}.apk
-    asset_name: SyncXxX-${{ github.event.inputs.tag }}.apk
-    asset_content_type: application/vnd.android.package-archive
+      - name: Upload APK to Release
+        if: ${{ github.event.inputs.tag != '' }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: output/SyncXxX-${{ github.event.inputs.build_type || 'release' }}.apk
+          asset_name: SyncXxX-${{ github.event.inputs.tag }}.apk
+          asset_content_type: application/vnd.android.package-archive
