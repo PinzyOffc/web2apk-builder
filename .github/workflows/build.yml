@@ -96,27 +96,26 @@ jobs:
               icon = img_base.resize((size, size), Image.LANCZOS) if use_icon else make_placeholder(size)
               icon.save(os.path.join(out_dir, "ic_launcher.png"), "PNG")
               icon.save(os.path.join(out_dir, "ic_launcher_round.png"), "PNG")
-              print(f"Default {density}: {size}x{size}")
 
               for name, src_file in THEMES.items():
                   if os.path.isfile(src_file):
                       theme_img = load_img(src_file).resize((size, size), Image.LANCZOS)
                   else:
-                      print(f"  WARNING: {src_file} tidak ditemukan, pakai placeholder untuk {name}")
                       theme_img = make_placeholder(size)
 
                   theme_img.save(os.path.join(out_dir, f"{name}.png"), "PNG")
-                  print(f"  Theme {name} {density}: {size}x{size}")
 
           print("✅ Icons generated")
           EOF
 
           python3 generate_icons.py
 
-      - name: Make Gradle Wrapper Executable
+      - name: Setup Gradle Wrapper
         run: |
-          chmod +x android/gradlew
-          echo "✅ Gradle wrapper ready"
+          cd android
+          gradle wrapper --gradle-version 8.7.0
+          chmod +x gradlew
+          echo "✅ Gradle wrapper generated"
 
       - name: Download ZIP (if provided)
         if: ${{ github.event.inputs.zip_url != '' }}
@@ -138,27 +137,27 @@ jobs:
             --no-daemon \
             --stacktrace
 
-      - name: Find and Rename APK
+      - name: Find and Copy APK
         run: |
           mkdir -p output
           BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
           
           if [ "$BUILD_TYPE" = "debug" ]; then
-            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" -type f | head -1)
+            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" -type f 2>/dev/null | head -1)
             if [ -n "$APK_PATH" ]; then
               cp "$APK_PATH" output/SyncXxX-debug.apk
-              echo "✅ Debug APK: $APK_PATH"
+              echo "✅ Debug APK copied"
             else
-              echo "❌ Debug APK tidak ditemukan"
+              echo "❌ Debug APK not found"
               exit 1
             fi
           else
-            APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" -type f | head -1)
+            APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" -type f 2>/dev/null | head -1)
             if [ -n "$APK_PATH" ]; then
               cp "$APK_PATH" output/SyncXxX-release.apk
-              echo "✅ Release APK: $APK_PATH"
+              echo "✅ Release APK copied"
             else
-              echo "❌ Release APK tidak ditemukan"
+              echo "❌ Release APK not found"
               exit 1
             fi
           fi
@@ -175,8 +174,6 @@ jobs:
           Build Type: $BUILD_TYPE
           Commit: ${GITHUB_SHA:0:7}
           EOF
-          
-          echo "✅ Version info created"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -196,11 +193,6 @@ jobs:
           release_name: Sync XxX ${{ github.event.inputs.tag }}
           draft: false
           prerelease: false
-          body: |
-            ## Build Info
-            - **Type**: ${{ github.event.inputs.build_type || 'release' }}
-            - **Date**: $(date)
-            - **Commit**: ${GITHUB_SHA}
 
       - name: Upload APK to Release
         if: ${{ github.event.inputs.tag != '' && success() }}
