@@ -30,54 +30,61 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore Gradle Files (if missing)
+      - name: Create Gradle Wrapper
         run: |
-          if [ ! -f "android/settings.gradle" ]; then
-            echo "⚠️ Gradle files missing, restoring from template..."
-            mkdir -p android/gradle/wrapper
-            
-            cat > android/settings.gradle << 'EOF'
-          rootProject.name = "SyncXxX"
-          include ':app'
-          EOF
-
-            cat > android/build.gradle << 'EOF'
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.2'
-                  classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
-              }
-          }
-
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          EOF
-
-            cat > android/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx2048m -XX:MaxPermSize=512m
-          android.useAndroidX=true
-          EOF
-
-            cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          #Mon Jun 19 12:00:00 GMT 2026
+          mkdir -p android/gradle/wrapper
+          
+          echo "📦 Setting up Gradle wrapper..."
+          
+          # Create gradle-wrapper.properties
+          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
           distributionUrl=https\://services.gradle.org/distributions/gradle-8.7.0-bin.zip
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           EOF
-
-            echo "✅ Gradle files restored"
+          
+          # Create gradlew script
+          cat > android/gradlew << 'EOFSH'
+          #!/bin/sh
+          
+          APP_NAME="Gradle"
+          APP_HOME="$(cd "$(dirname "$0")" && pwd)"
+          GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
+          
+          mkdir -p "$GRADLE_USER_HOME/wrapper/dists"
+          
+          WRAPPER_PROPS="$APP_HOME/gradle/wrapper/gradle-wrapper.properties"
+          DIST_URL=$(grep 'distributionUrl=' "$WRAPPER_PROPS" | cut -d'=' -f2 | tr -d ' ')
+          
+          GRADLE_VERSION="8.7.0"
+          WRAPPER_DIR="$GRADLE_USER_HOME/wrapper/dists/gradle-${GRADLE_VERSION}"
+          
+          if [ ! -d "$WRAPPER_DIR" ]; then
+            echo "Downloading Gradle ${GRADLE_VERSION}..."
+            mkdir -p "$WRAPPER_DIR"
+            cd "$WRAPPER_DIR"
+            curl -L -o gradle.zip "$DIST_URL"
+            unzip -q gradle.zip
+            rm gradle.zip
+            cd - > /dev/null
+          fi
+          
+          GRADLE_JAR="$WRAPPER_DIR/gradle-${GRADLE_VERSION}/lib/gradle-${GRADLE_VERSION}.jar"
+          
+          exec java -jar "$GRADLE_JAR" "$@"
+          EOFSH
+          
+          # Make executable
+          chmod +x android/gradlew
+          
+          # Verify
+          if [ -f "android/gradlew" ]; then
+            echo "✅ Gradle wrapper created successfully"
           else
-            echo "✅ Gradle files already present"
+            echo "❌ Failed to create gradle wrapper"
+            exit 1
           fi
 
       - name: Set up JDK 17
@@ -160,25 +167,13 @@ jobs:
 
           python3 generate_icons.py
 
-      - name: Setup Gradle Wrapper
-        run: |
-          cd android
-          gradle wrapper --gradle-version 8.7.0 2>/dev/null || true
-          chmod +x gradlew
-          echo "✅ Gradle wrapper ready"
-
       - name: Download ZIP (if provided)
         if: ${{ github.event.inputs.zip_url != '' }}
         run: |
+          echo "⬇️ Downloading custom ZIP..."
           curl -L -o source.zip "${{ github.event.inputs.zip_url }}"
           unzip -o source.zip -d ./
-          echo "✅ ZIP downloaded and extracted"
-
-      - name: Show build info
-        run: |
-          echo "📦 Build Type: ${{ github.event.inputs.build_type || 'release' }}"
-          echo "🏷️ Tag: ${{ github.event.inputs.tag || 'latest' }}"
-          echo "🔨 Building Sync XxX APK..."
+          echo "✅ ZIP extracted"
 
       - name: Build APK
         run: |
@@ -192,11 +187,11 @@ jobs:
           BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
           
           if [ "$BUILD_TYPE" = "debug" ]; then
-            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" -type f 2>/dev/null | head -1)
-            [ -n "$APK_PATH" ] && cp "$APK_PATH" output/SyncXxX-debug.apk && echo "✅ Debug APK copied"
+            find android/app/build/outputs/apk/debug -name "*.apk" -exec cp {} output/SyncXxX-debug.apk \;
+            echo "✅ Debug APK ready"
           else
-            APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" -type f 2>/dev/null | head -1)
-            [ -n "$APK_PATH" ] && cp "$APK_PATH" output/SyncXxX-release.apk && echo "✅ Release APK copied"
+            find android/app/build/outputs/apk/release -name "*.apk" -exec cp {} output/SyncXxX-release.apk \;
+            echo "✅ Release APK ready"
           fi
 
       - name: Create Version Info
@@ -215,3 +210,26 @@ jobs:
           name: SyncXxX-APK-${{ github.event.inputs.tag || 'latest' }}
           path: output/
           retention-days: 30
+
+      - name: Create GitHub Release
+        id: create_release
+        if: ${{ github.event.inputs.tag != '' }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          release_name: Sync XxX ${{ github.event.inputs.tag }}
+          draft: false
+          prerelease: false
+
+      - name: Upload APK to Release
+        if: ${{ github.event.inputs.tag != '' && success() }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: output/SyncXxX-${{ github.event.inputs.build_type || 'release' }}.apk
+          asset_name: SyncXxX-${{ github.event.inputs.tag }}-${{ github.event.inputs.build_type || 'release' }}.apk
+          asset_content_type: application/vnd.android.package-archive
