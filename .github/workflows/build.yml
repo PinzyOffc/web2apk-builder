@@ -108,16 +108,15 @@ jobs:
                   theme_img.save(os.path.join(out_dir, f"{name}.png"), "PNG")
                   print(f"  Theme {name} {density}: {size}x{size}")
 
-          print("Icons done")
+          print("✅ Icons generated")
           EOF
 
           python3 generate_icons.py
 
-      - name: Setup Gradle Wrapper
+      - name: Make Gradle Wrapper Executable
         run: |
-          cd android
-          gradle wrapper --gradle-version 8.4
-          chmod +x gradlew
+          chmod +x android/gradlew
+          echo "✅ Gradle wrapper ready"
 
       - name: Download ZIP (if provided)
         if: ${{ github.event.inputs.zip_url != '' }}
@@ -132,27 +131,52 @@ jobs:
           echo "🏷️ Tag: ${{ github.event.inputs.tag || 'latest' }}"
           echo "🔨 Building Sync XxX APK..."
 
-      - name: Build Release APK
+      - name: Build APK
         run: |
           cd android
-          ./gradlew assemble${{ github.event.inputs.build_type == 'debug' && 'Debug' || 'Release' }} --no-daemon
+          ./gradlew assemble${{ github.event.inputs.build_type == 'debug' && 'Debug' || 'Release' }} \
+            --no-daemon \
+            --stacktrace
 
-      - name: Rename APK
+      - name: Find and Rename APK
         run: |
           mkdir -p output
           BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
+          
           if [ "$BUILD_TYPE" = "debug" ]; then
-            find android/app/build/outputs/apk/debug/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX-debug.apk
+            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" -type f | head -1)
+            if [ -n "$APK_PATH" ]; then
+              cp "$APK_PATH" output/SyncXxX-debug.apk
+              echo "✅ Debug APK: $APK_PATH"
+            else
+              echo "❌ Debug APK tidak ditemukan"
+              exit 1
+            fi
           else
-            find android/app/build/outputs/apk/release/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX-release.apk
+            APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" -type f | head -1)
+            if [ -n "$APK_PATH" ]; then
+              cp "$APK_PATH" output/SyncXxX-release.apk
+              echo "✅ Release APK: $APK_PATH"
+            else
+              echo "❌ Release APK tidak ditemukan"
+              exit 1
+            fi
           fi
 
-      - name: Create version info
+      - name: Create Version Info
         run: |
+          mkdir -p output
           TAG="${{ github.event.inputs.tag || 'latest' }}"
-          echo "Version: $TAG" > output/version.txt
-          echo "Build Date: $(date)" >> output/version.txt
-          echo "Build Type: ${{ github.event.inputs.build_type || 'release' }}" >> output/version.txt
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
+          
+          cat > output/version.txt << EOF
+          Version: $TAG
+          Build Date: $(date)
+          Build Type: $BUILD_TYPE
+          Commit: ${GITHUB_SHA:0:7}
+          EOF
+          
+          echo "✅ Version info created"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -161,7 +185,7 @@ jobs:
           path: output/
           retention-days: 30
 
-      - name: Create Release
+      - name: Create GitHub Release
         id: create_release
         if: ${{ github.event.inputs.tag != '' }}
         uses: actions/create-release@v1
@@ -169,17 +193,22 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.event.inputs.tag }}
-          release_name: Release ${{ github.event.inputs.tag }}
+          release_name: Sync XxX ${{ github.event.inputs.tag }}
           draft: false
           prerelease: false
+          body: |
+            ## Build Info
+            - **Type**: ${{ github.event.inputs.build_type || 'release' }}
+            - **Date**: $(date)
+            - **Commit**: ${GITHUB_SHA}
 
       - name: Upload APK to Release
-        if: ${{ github.event.inputs.tag != '' }}
+        if: ${{ github.event.inputs.tag != '' && success() }}
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: output/SyncXxX-${{ github.event.inputs.build_type || 'release' }}.apk
-          asset_name: SyncXxX-${{ github.event.inputs.tag }}.apk
+          asset_name: SyncXxX-${{ github.event.inputs.tag }}-${{ github.event.inputs.build_type || 'release' }}.apk
           asset_content_type: application/vnd.android.package-archive
