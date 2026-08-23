@@ -119,11 +119,11 @@ jobs:
 
           python3 generate_icons.py
 
-      - name: Setup Gradle Wrapper
-        run: |
-          curl -L -o android/gradle/wrapper/gradle-wrapper.jar \
-            "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
-          chmod +x android/gradlew
+- name: Setup Gradle Wrapper
+  run: |
+    cd android
+    gradle wrapper --gradle-version 8.4
+    chmod +x gradlew
 
       - name: Download ZIP (if provided)
         if: ${{ github.event.inputs.zip_url != '' }}
@@ -167,13 +167,25 @@ jobs:
           path: output/
           retention-days: 30
 
-      - name: Upload APK to Release (if tag provided)
-        if: ${{ github.event.inputs.tag != '' }}
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: output/SyncXxX-${{ github.event.inputs.build_type || 'release' }}.apk
-          asset_name: SyncXxX-${{ github.event.inputs.tag }}.apk
-          asset_content_type: application/vnd.android.package-archive
+      - name: Create Release
+  id: create_release
+  if: ${{ github.event.inputs.tag != '' }}
+  uses: actions/create-release@v1
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  with:
+    tag_name: ${{ github.event.inputs.tag }}
+    release_name: Release ${{ github.event.inputs.tag }}
+    draft: false
+    prerelease: false
+
+- name: Upload APK to Release
+  if: ${{ github.event.inputs.tag != '' }}
+  uses: actions/upload-release-asset@v1
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  with:
+    upload_url: ${{ steps.create_release.outputs.upload_url }}
+    asset_path: output/SyncXxX-${{ github.event.inputs.build_type || 'release' }}.apk
+    asset_name: SyncXxX-${{ github.event.inputs.tag }}.apk
+    asset_content_type: application/vnd.android.package-archive
